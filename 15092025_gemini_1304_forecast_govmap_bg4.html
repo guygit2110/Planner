@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0" name="viewport"/>
+<title>Parachute Planner — Stable with Measurement Tool</title>
+<!-- Leaflet -->
+<link crossorigin="" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" rel="stylesheet"/>
+<script crossorigin="" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- GeoTIFF (Copernicus) -->
+<script crossorigin="" src="https://cdn.jsdelivr.net/npm/geotiff@2.0.7/dist/geotiff.min.js"></script>
+<!-- ADDED: Measurement Tool Plugin -->
+<link crossorigin="" href="https://unpkg.com/leaflet-measure/dist/leaflet-measure.css" rel="stylesheet"/>
+<script crossorigin="" src="https://unpkg.com/leaflet-measure/dist/leaflet-measure.js"></script>
+<style>
+    :root{--panel-bg:#f7f7f8;--panel-shadow:0 -8px 24px rgba(0,0,0,.18);--radius:16px}
+    html,body{height:100%;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+    body{display:flex;overflow:hidden}
+    #map{flex:3;height:100%;cursor:crosshair}
+    #controls{flex:1;height:100%;overflow:auto;background:#f4f4f4;padding:20px;box-shadow:-2px 0 5px rgba(0,0,0,.1)}
+    h2,h3{margin:0 0 8px;border-bottom:1px solid #ddd;padding-bottom:6px;color:#222}
+    h3{margin-top:16px}
+    .input-group{margin-bottom:12px}
+    .input-group label{display:block;margin-bottom:6px;font-weight:700;color:#444}
+    .input-group input,.input-group select, .input-group textarea{width:100%;padding:10px;border:1px solid #ccc;border-radius:8px;box-sizing:border-box;font-size:16px}
+    .radio-group label{display:inline-block;margin-right:12px;font-weight:500}
+    button{padding:12px 14px;border:none;border-radius:10px;color:#fff;background:#007bff;cursor:pointer;font-size:16px}
+    button.block{display:block;width:100%;margin-top:10px}
+    button.muted{background:#6c757d}
+    button.danger{background:#dc3545}
+    button#kml{background:#17a2b8}
+    button:disabled{background:#6c757d;opacity:.7;cursor:not-allowed}
+    #results{margin-top:14px;background:#e9ecef;padding:12px;border-radius:10px}
+    .rs-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;align-items:center}
+    .rs-row input{flex:1 1 120px}
+    .rs-row .small{flex:0 0 90px}
+    .rs-row .kill{flex:0 0 40px;background:#dc3545;color:#fff;border:none;border-radius:8px;font-size:18px;line-height:1}
+    .muted-note{font-size:12px;color:#666;margin-top:-4px;margin-bottom:6px}
+    .rs-sigma{display:none;gap:8px;width:100%}
+    #rs-rows-wrap.sigma-on .rs-sigma{display:flex}
+    #station-preview{font-size:13px;color:#333;background:#fff;border:1px dashed #ccc;border-radius:8px;padding:8px;line-height:1.35;display:none}
+    .row{display:flex;gap:8px}
+    .row .half{flex:1}
+    #top-banner{position:fixed;top:calc(env(safe-area-inset-top,0px) + 8px);left:50%;transform:translateX(-50%);background:rgba(255,255,255,.95);padding:6px 12px;border-radius:10px;font-size:12px;line-height:1.25;z-index:10000;box-shadow:0 1px 8px rgba(0,0,0,.25);pointer-events:none;max-width:min(92vw,980px);text-align:center;color:#222;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #top-banner b{font-weight:600}
+    #top-banner .sep{margin:0 .5em;color:#999}
+    @media (max-width:768px){body{display:block}#map{position:fixed;inset:0;height:100%;z-index:0}#controls{position:fixed;left:0;right:0;bottom:0;background:var(--panel-bg);border-top-left-radius:var(--radius);border-top-right-radius:var(--radius);box-shadow:var(--panel-shadow);padding:16px 14px calc(12px + env(safe-area-inset-bottom));max-height:70vh;transform:translateY(calc(100% - 56px));transition:transform .25s ease;z-index:1000;overflow:auto}#controls.open{transform:translateY(0)}#controls::before{content:"";display:block;width:44px;height:5px;border-radius:3px;background:#c7c7cc;margin:0 auto 10px}#toggle-panel{position:fixed;right:12px;bottom:12px;z-index:1100;background:#111;color:#fff;border:none;border-radius:999px;padding:10px 14px;font-size:16px}}
+  </style>
+</head>
+<body>
+<!-- Capture Leaflet map & layersControl even if scoped -->
+<script>
+(function(){
+  function install(){
+    if (!window.L || !L.map || !L.control || !L.control.layers) { setTimeout(install, 50); return; }
+    const origMap = L.map;
+    L.map = function(){
+      const m = origMap.apply(this, arguments);
+      try { window.map = m; } catch(e){}
+      return m;
+    };
+    const origLC = L.control.layers;
+    L.control.layers = function(){
+      const ctrl = origLC.apply(this, arguments);
+      try { window.layersControl = ctrl; } catch(e){}
+      return ctrl;
+    };
+  }
+  install();
+})();
+</script>
+
+<div aria-label="Credits" id="top-banner">
+<b>Made by Guy Gitelis</b><span class="sep">•</span><span id="active-credit">Loading…</span>
+</div>
+<button aria-expanded="false" id="toggle-panel" style="display:none">☰ Controls</button>
+<div aria-label="Controls Panel" id="controls">
+<h2>Planner</h2>
+<h3>Core Parameters</h3>
+<div class="input-group"><label>Units</label><select id="units"><option value="metric">Meters (m)</option><option value="imperial">Feet (ft)</option></select></div>
+<div class="input-group"><label>Drop Point (tap map)</label><input id="drop-point-coords" readonly=""/></div>
+<div class="input-group"><label>Manual Coordinates (decimal degrees)</label><div class="row"><input class="half" id="lat-input" placeholder="Latitude" step="0.00001" type="number"/><input class="half" id="lng-input" placeholder="Longitude" step="0.00001" type="number"/></div><button class="block" id="set-coords" type="button">Set Drop Point</button></div>
+<div class="input-group radio-group"><label style="font-weight:bold">Altitude Type:</label><label><input checked="" name="alt-type" type="radio" value="agl"/> AGL</label><label><input name="alt-type" type="radio" value="msl"/> MSL</label></div>
+<div class="input-group"><label id="drop-alt-label">Drop Altitude AGL (m)</label><input id="drop-alt" inputmode="decimal" type="number" value="304.8"/></div>
+<div class="input-group"><label id="drop-error-label">Drop Point Error (m)</label><input id="drop-error" inputmode="decimal" type="number" value="50"/></div>
+<div class="input-group"><label>Glide Ratio</label><input id="glide-ratio" inputmode="decimal" step="0.1" type="number" value="3.5"/></div>
+<div class="input-group"><label id="descent-speed-label">Descent Speed (m/s)</label><input id="descent-speed" inputmode="decimal" step="0.1" type="number" value="5"/></div>
+<h3>Wind</h3>
+<div class="input-group"><label>Wind Source</label><select id="wind-source"><option value="model">Scenario/Gust Model</option><option value="radiosonde">Radiosonde Profile</option><option value="station">Station JSON (per-hour)</option><option value="combined">Combined (Radiosonde + Custom)</option><option value="forecast">Live Forecast Model</option></select></div>
+<div id="forecast-section" style="display:none;"><div class="input-group"><label>Forecast Model</label><select id="forecast-model"><option selected="" value="icon_global">ICON Global (~7km)</option><option value="gfs_global">GFS Global (~28km)</option><option value="ecmwf_ifs04">ECMWF IFS (~28km)</option></select><div class="muted-note">Pulls a wind profile for the selected time and location.</div></div><div class="input-group"><label>Forecast Time (Local)</label><input id="forecast-time" type="datetime-local"><div class="muted-note">Select a date and time up to several days in the future.</div></input></div><button class="block muted" id="fetch-forecast" type="button">Fetch &amp; Populate Profile</button><div class="input-group" style="margin-top: 10px;"><label>Fetched Profile Data (m/s - for verification)</label><textarea id="forecast-raw-output" placeholder="Fetched data will appear here..." readonly=""></textarea></div></div>
+<div id="model-section">
+<div class="input-group"><label>Scenario</label><select id="wind-model-select"></select></div>
+<div id="custom-wind" style="display:none"><div class="input-group"><label id="custom-mean-wind-label">Mean Wind (m/s)</label><input id="custom-mean-wind" inputmode="decimal" type="number"/></div><div class="input-group"><label>Sigma (σ)</label><input id="custom-sigma" inputmode="decimal" type="number"/></div><div class="input-group"><label>Gust Factor</label><input id="custom-gust-factor" inputmode="decimal" type="number"/></div></div>
+<div class="input-group radio-group"><label><input checked="" name="wind-calc" type="radio" value="mean"/> Mean</label><label><input name="wind-calc" type="radio" value="mean_1s"/> Mean+1σ</label><label><input name="wind-calc" type="radio" value="mean_2s"/> Mean+2σ</label><label><input name="wind-calc" type="radio" value="gust"/> Gust</label></div>
+</div>
+<div id="radiosonde-section" style="display:none">
+<div class="muted-note" id="rs-note">הזן שכבות: גובה (MSL), מהירות, וכיוון °from. אפשרי: σ למהירות/כיוון.</div><div class="input-group" style="margin-top:8px;"><label style="font-weight:500"><input id="rs-enable-sigma" type="checkbox"/> Enable σ per layer</label></div>
+<div class="input-group"><label id="rs-alt-label">Altitude MSL (m)</label></div><div id="rs-rows-wrap"><div id="rs-rows"></div></div>
+<div class="input-group" style="display:flex;gap:8px"><button class="muted" id="rs-add" type="button">Add Layer</button><button class="danger" id="rs-clear" type="button">Clear</button></div>
+<div class="input-group" id="rs-bg-wrap" style="margin-top:10px;border:1px dashed #bbb;padding:10px;border-radius:8px;">
+<label><input id="rs-bg-enable" type="checkbox"/> רוח רקע מחוץ ל<i>כיוון</i> הסונדה</label><div class="muted-note">הכיוון מחושב אוטומטית. מחוץ לכיוון – מוחלת רוח קבועה.</div>
+<div class="input-group"><label>Mode</label><div class="radio-group"><label><input checked="" name="rs-bg-mode" type="radio" value="exact"/> Exact direction</label><label><input name="rs-bg-mode" type="radio" value="sector"/> Sector (± Half-width)</label></div></div>
+<div class="row" id="rs-half-row" style="display:none;"><div class="half"><label>Half-width (°)</label><input id="rs-bg-half" max="180" min="1" step="1" type="number" value="22"/></div></div>
+<div class="row"><div class="half"><label id="rs-bg-speed-label">Background speed (m/s)</label><input id="rs-bg-speed" step="0.1" type="number" value="5"/></div><div class="half"><label>σ (optional)</label><input id="rs-bg-sigma" placeholder="0" step="0.1" type="number"/></div></div>
+</div>
+</div>
+<div id="station-section" style="display:none">...</div>
+<h3>Uncertainty</h3>
+<div class="input-group"><label>Uncertainty Mode</label><select id="uncertainty-mode"><option selected="" value="envelope">Envelope (±kσ)</option><option value="upper">Upper (+kσ)</option><option value="lower">Lower (−kσ)</option></select></div>
+<div class="input-group"><label>σ Mode</label><select id="sigma-mode"><option selected="" value="headtail">Head/Tail (sign-aware)</option><option value="projection">Projection (component σ)</option><option value="max">Conservative (max)</option></select></div>
+<div class="input-group"><label>σ Level</label><select id="sigma-level"><option value="0">Mean (k=0)</option><option selected="" value="1">+1σ (k=1)</option><option value="2">+2σ (k=2)</option><option value="3">Gust (+3σ)</option></select></div>
+<h3>Footprint Resolution</h3>
+<div class="input-group"><label>Angular step (°)</label><input id="bearing-step" max="45" min="0.5" step="0.5" type="number" value="2"/></div>
+<div class="input-group"><label>Profile samples</label><input id="profile-samples" max="10" min="1" step="1" type="number" value="3"/></div>
+<div class="input-group"><label>Nearest sample (%)</label><input id="profile-start-pct" max="95" min="10" step="1" type="number" value="45"/></div>
+<div class="input-group"><label>Min spacing (m)</label><input id="min-sample-m" min="5" step="5" type="number" value="40"/></div>
+<h3>Elevation</h3>
+<div class="input-group"><label>Source</label><select id="elev-source"><option selected="" value="auto">Auto (30m → 90m)</option><option value="opentopodata">SRTM 30m</option><option value="open-elev">Open-Elevation (≈90m)</option><option value="copernicus">Copernicus GLO-30</option></select></div>
+<div class="input-group" id="ot-key-wrap" style="display:none"><label>OpenTopography API Key</label><input id="ot-api-key" placeholder="Paste your key" type="text"/></div>
+<div class="input-group"><label id="wind-speed-label">Resulting Wind (m/s)</label><input id="wind-speed" readonly=""/></div>
+<button class="block" id="calc">Calculate Landing Zone</button>
+<button class="block" disabled="" id="kml">Export KML</button>
+<div id="results"><h3>Results</h3><p id="range">Max Distance (outer): N/A</p><p id="range-inner">Min Distance (inner/upwind): N/A</p><p id="elev">Drop Point Elevation: N/A</p></div>
+</div>
+<div aria-label="Map" id="map"></div>
+<script>
+/* ---------- Constants ---------- */
+const M2FT = 3.28084, MPS2KTS = 1.94384, KMH2MS = 0.2777777778, KTS2MS = 0.5144444444;
+const windModels=[
+  {name:"Summer Calm",mean:2,sigma:1,gust:1.5},{name:"Summer Breezy",mean:6,sigma:2,gust:1.6},
+  {name:"Winter Mild",mean:5,sigma:2.5,gust:1.8},{name:"Winter Storm",mean:12,sigma:4,gust:2},
+  {name:"Sharav Strong",mean:10,sigma:3,gust:1.7},{name:"Custom"}
+];
+/* --- Elevation cache (per session) --- */
+const elevPointCache = new Map();
+const DEG = Math.PI/180;
+
+/* ---------- Globals ---------- */
+let map, marker, overlay, kml;
+let copRaster = null, copMeta = null, copKey = "";
+
+/* ---------- Init ---------- */
+window.onload=()=>{
+  map=L.map("map",{attributionControl:false}).setView([33.15,35.75],13);
+
+  /* Basemaps (free) */
+  const govmapHE = L.tileLayer("https://cdnil.govmap.gov.il/xyz/heb/{z}/{x}/{y}.png",{ maxZoom:20, attribution:"GovMap © Survey of Israel" });
+  const govmapEN = L.tileLayer("https://cdnil.govmap.gov.il/xyz/eng/{z}/{x}/{y}.png",{ maxZoom:20, attribution:"GovMap © Survey of Israel" });
+  const esriImagery=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",{ attribution:"Imagery © Esri, Maxar" });
+  const esriClarity=L.tileLayer("https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",{ attribution:"Imagery © Esri (Clarity)" });
+  const s2cloud2024=L.tileLayer("https://{s}.tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2024_3857/default/g/{z}/{y}/{x}.jpg",{ subdomains:["a","b","c","d"], maxZoom:13, attribution:"Sentinel-2 Cloudless © EOX, Copernicus" });
+  const topo=L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",{ maxZoom:17, attribution:"Topo © OpenTopoMap, OpenStreetMap" });
+  const hillshadeBase=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Hillshade/MapServer/tile/{z}/{y}/{x}",{ maxZoom:19, attribution:"Terrain © Esri — World Hillshade" });
+  const hillshadeLabels=L.tileLayer("https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",{ maxZoom:19, attribution:"Labels © Esri" });
+  const terrainHillshade=L.layerGroup([hillshadeBase, hillshadeLabels]);
+  const terrainBaseColor=L.tileLayer("https://services.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}",{ maxZoom:19, attribution:"Basemap © Esri — World Terrain Base" });
+  const terrainBaseLabels=L.tileLayer("https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",{ maxZoom:19, attribution:"Labels © Esri" });
+  const terrainEsriBase=L.layerGroup([terrainBaseColor, terrainBaseLabels]);
+  const street=L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{ maxZoom:19, attribution:"Map data © OpenStreetMap contributors" }).addTo(map);
+
+  const baseLayers = {
+    "GovMap Basemap (HE)":govmapHE, "GovMap Basemap (EN)":govmapEN, "Esri Imagery (Clarity)":esriClarity,
+    "Esri Imagery":esriImagery, "Sentinel-2 Cloudless 2024":s2cloud2024, "Topo (OpenTopoMap)":topo,
+    "Terrain (Hillshade)":terrainHillshade, "Terrain (Esri Base)":terrainEsriBase, "Street (OSM)":street
+  };
+  L.control.layers(baseLayers, {}, {position:"topright"}).addTo(map);
+  overlay=L.layerGroup().addTo(map);
+
+  const creditEl=document.getElementById('active-credit');
+  const updateBannerFor=(layer)=>creditEl.textContent=layer?.options?.attribution||"—";
+  updateBannerFor(street);
+  map.on('baselayerchange', (e)=> updateBannerFor(e.layer));
+
+  const sel=document.getElementById("wind-model-select");
+  windModels.forEach((m,i)=>{const o=document.createElement("option");o.value=i;o.textContent=m.name;sel.appendChild(o);});
+
+  if(window.matchMedia("(max-width: 768px)").matches){const t=document.getElementById("toggle-panel"),p=document.getElementById("controls");t.style.display="block";t.addEventListener("click",()=>{p.classList.toggle("open");t.setAttribute("aria-expanded",String(p.classList.contains("open")));setTimeout(()=>map.invalidateSize(),250)})}
+
+  document.getElementById("set-coords").onclick = applyManualCoords;
+  map.on("click",e=>setMarker(e.latlng));
+  document.getElementById("units").onchange=unitChange;
+  document.querySelectorAll('input[name="alt-type"]').forEach(r=>r.onchange=()=>{updateLabels();if(marker)calc()});
+  sel.onchange=updateWind;
+  document.querySelectorAll('input[name="wind-calc"]').forEach(r=>r.onchange=()=>{if(marker)calc();else updateWind()});
+  ["custom-mean-wind","custom-sigma","custom-gust-factor"].forEach(id=>{const el=document.getElementById(id);if(el)el.oninput=updateWind});
+  document.getElementById("wind-source").onchange=()=>{toggleWindSource();if(marker)calc()};
+  document.getElementById("rs-add").onclick=()=>addRsRow();
+  document.getElementById("rs-clear").onclick=clearRs;
+  document.getElementById("rs-enable-sigma").onchange=toggleRsSigma;
+  document.getElementById("uncertainty-mode").onchange=()=>{if(marker)calc()};
+  document.getElementById("sigma-mode").onchange=()=>{if(marker)calc()};
+  document.getElementById("sigma-level").onchange=()=>{if(document.getElementById("wind-source").value==='model')updateWind();if(marker)calc()};
+  document.getElementById("calc").onclick=calc;
+  document.getElementById("kml").onclick=exportKML;
+  document.getElementById("elev-source").onchange=()=>{toggleElevSource();if(marker)calc()};
+  const savedKey=localStorage.getItem("ot_api_key");
+  if(savedKey){document.getElementById("ot-api-key").value=savedKey;copKey=savedKey}
+  document.getElementById("ot-api-key").oninput=e=>{copKey=e.target.value.trim();localStorage.setItem("ot_api_key",copKey)};
+  document.getElementById("fetch-forecast").onclick=fetchForecastData;
+  const now=new Date;
+  now.setMinutes(now.getMinutes()-now.getTimezoneOffset());
+  now.setSeconds(0);now.setMilliseconds(0);
+  document.getElementById("forecast-time").value=now.toISOString().slice(0,16);
+  ["rs-bg-enable","rs-bg-half","rs-bg-speed","rs-bg-sigma"].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener("change",()=>{if(marker)calc()})});
+  document.querySelectorAll('input[name="rs-bg-mode"]').forEach(r=>{r.addEventListener("change",()=>{const mode=document.querySelector('input[name="rs-bg-mode"]:checked').value;document.getElementById("rs-half-row").style.display=mode==='sector'?'flex':'none';if(marker)calc()})});
+  
+  for(let i=0;i<3;i++)addRsRow();
+  updateLabels();
+  toggleWindSource();
+  toggleElevSource();
+  updateWind();
+  setTimeout(()=>map.invalidateSize(),200);
+};
+
+/* ---------- UI helpers ---------- */
+const imperial=()=>document.getElementById("units").value==="imperial";
+const units=()=>imperial()?{d:"ft",v:"ft/s",w:"knots"}:{d:"m",v:"m/s",w:"m/s"};
+function setMarker(latlng){if(marker)map.removeLayer(marker);marker=L.marker(latlng).addTo(map);document.getElementById("drop-point-coords").value=`${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;document.getElementById("lat-input").value=latlng.lat.toFixed(5);document.getElementById("lng-input").value=latlng.lng.toFixed(5);copRaster=null;copMeta=null;calc()}
+function applyManualCoords(){const lat=parseFloat(document.getElementById("lat-input").value),lng=parseFloat(document.getElementById("lng-input").value);if(!Number.isFinite(lat)||!Number.isFinite(lng)||lat<-90||lat>90||lng<-180||lng>180)return void alert("Please enter valid decimal degrees: lat −90..90, lon −180..180");const ll=L.latLng(lat,lng);setMarker(ll);map.getZoom()<13?map.setView(ll,13):map.panTo(ll)}
+function unitChange(){const f=imperial()?M2FT:1/M2FT;["drop-alt","drop-error","descent-speed"].forEach(id=>{const el=document.getElementById(id);el.value=(parseFloat(el.value)*f).toFixed(2)});const spdFactor=imperial()?MPS2KTS:1/MPS2KTS;document.querySelectorAll(".rs-row").forEach(row=>{const a=row.querySelector(".rs-alt"),s=row.querySelector(".rs-spd"),ss=row.querySelector(".rs-ssd");a.value&&(a.value=(parseFloat(a.value)*f).toFixed(1));s.value&&(s.value=(parseFloat(s.value)*spdFactor).toFixed(2));ss&&ss.value&&(ss.value=(parseFloat(ss.value)*spdFactor).toFixed(2))});const wFactor=imperial()?MPS2KTS:1/MPS2KTS,cm=document.getElementById("custom-mean-wind"),cs=document.getElementById("custom-sigma");cm&&cm.value&&(cm.value=(parseFloat(cm.value)*wFactor).toFixed(2));cs&&cs.value&&(cs.value=(parseFloat(cs.value)*wFactor).toFixed(2));const bgS=document.getElementById("rs-bg-speed"),bgSig=document.getElementById("rs-bg-sigma");bgS&&bgS.value&&(bgS.value=(parseFloat(bgS.value)*wFactor).toFixed(2));bgSig&&bgSig.value&&(bgSig.value=(parseFloat(bgSig.value)*wFactor).toFixed(2));updateLabels();updateWind();if(marker)calc()}
+function updateLabels(){const u=units(),mode=document.querySelector('input[name="alt-type"]:checked').value;let src=document.getElementById("wind-source").value;(src==='combined'||src==='forecast')&&(src='radiosonde');document.getElementById("drop-alt-label").textContent=`Drop Altitude ${mode.toUpperCase()} (${u.d})`;document.getElementById("drop-error-label").textContent=`Drop Point Error (${u.d})`;document.getElementById("descent-speed-label").textContent=`Descent Speed (${u.v})`;document.getElementById("custom-mean-wind-label").textContent=`Mean Wind (${u.w})`;document.getElementById("rs-alt-label").textContent=`Altitude MSL (${u.d})`;document.getElementById("wind-speed-label").textContent=src==='radiosonde'?`Avg Wind (profile) (${u.w})`:src==='station'?`Avg Wind (station) (${u.w})`:`Resulting Wind (${u.w})`;const bgLab=document.getElementById("rs-bg-speed-label");bgLab&&(bgLab.textContent=`Background speed (${u.w})`)}
+function toggleWindSource(){const src=document.getElementById("wind-source").value,modelSelect=document.getElementById("wind-model-select");document.getElementById("model-section").style.display=src==='model'||src==='combined'?'block':'none';document.getElementById("radiosonde-section").style.display=src==='radiosonde'||src==='combined'||src==='forecast'?'block':'none';document.getElementById("station-section").style.display=src==='station'?'block':'none';document.getElementById("forecast-section").style.display=src==='forecast'?'block':'none';if(src==='combined'){const customIndex=windModels.findIndex(m=>m.name==="Custom");customIndex!==-1&&(modelSelect.value=customIndex,modelSelect.disabled=!0,updateWind())}else modelSelect.disabled=!1;updateLabels();if(src!=='model'&&src!=='combined')updateWind()}
+function toggleElevSource(){document.getElementById("ot-key-wrap").style.display=document.getElementById("elev-source").value==="copernicus"?"block":"none"}
+function toggleRsSigma(){const wrap=document.getElementById("rs-rows-wrap");document.getElementById("rs-enable-sigma").checked?wrap.classList.add("sigma-on"):wrap.classList.remove("sigma-on")}
+function updateWind(){const src=document.getElementById("wind-source").value;if(src!=='model'&&src!=='combined')return void(src!=='radiosonde'&&src!=='station'&&src!='forecast'&&(document.getElementById("wind-speed").value=""));const sel=document.getElementById("wind-model-select"),model=windModels[sel.value]||windModels[0];document.getElementById("custom-wind").style.display=model.name==="Custom"?"block":"none";let mean_ms,sigma_ms,gustFactor;if(model.name==="Custom"){const meanIn=parseFloat(document.getElementById("custom-mean-wind").value),sigmaIn=parseFloat(document.getElementById("custom-sigma").value),gustIn=parseFloat(document.getElementById("custom-gust-factor").value);mean_ms=Number.isFinite(meanIn)?imperial()?meanIn/MPS2KTS:meanIn:5,sigma_ms=Number.isFinite(sigmaIn)?imperial()?sigmaIn/MPS2KTS:sigmaIn:1,gustFactor=Number.isFinite(gustIn)?Math.max(0,gustIn):1.5}else mean_ms=model.mean,sigma_ms=model.sigma,gustFactor=model.gust;const calcMode=document.querySelector('input[name="wind-calc"]:checked').value;let w_ms=mean_ms;calcMode==='mean_1s'?w_ms+=sigma_ms:calcMode==='mean_2s'?w_ms+=2*sigma_ms:calcMode==='gust'&&(w_ms*=gustFactor);if(src==='model')document.getElementById("wind-speed").value=(imperial()?w_ms*MPS2KTS:w_ms).toFixed(2)}
+function addRsRow(alt="",spd="",dir="",ssd="",sdir=""){const row=document.createElement("div");row.className="rs-row";row.innerHTML=`<input class="rs-alt" type="number" step="1" placeholder="Alt MSL" value="${alt}" inputmode="numeric"><input class="rs-spd" type="number" step="0.1" placeholder="Wind Speed" value="${spd}" inputmode="decimal"><input class="rs-dir small" type="number" step="1" min="0" max="360" placeholder="Dir °from" value="${dir}" inputmode="numeric"><div class="rs-sigma"><input class="rs-ssd small" type="number" step="0.1" placeholder="σ speed"><input class="rs-sdir small" type="number" step="1" placeholder="σ dir °"></div><button type="button" class="kill" title="Remove">×</button>`;sdir!==""&&(row.querySelector(".rs-sdir").value=sdir);row.querySelector(".kill").onclick=()=>row.remove();document.getElementById("rs-rows").appendChild(row)}
+function clearRs(){document.getElementById("rs-rows").innerHTML=""}
+function getRadiosondePointsMS(){const pts=[];return document.querySelectorAll(".rs-row").forEach(row=>{const a=parseFloat(row.querySelector(".rs-alt").value),s=parseFloat(row.querySelector(".rs-spd").value),d=parseFloat(row.querySelector(".rs-dir").value);if(Number.isFinite(a)&&Number.isFinite(s)&&Number.isFinite(d)){const alt_m=imperial()?a/M2FT:a,spd_ms=imperial()?s/MPS2KTS:s,ssd_raw=parseFloat(row.querySelector(".rs-ssd")?.value),sdir_deg=parseFloat(row.querySelector(".rs-sdir")?.value),sigma_s=Number.isFinite(ssd_raw)?imperial()?ssd_raw/MPS2KTS:ssd_raw:0,sigma_beta=Number.isFinite(sdir_deg)?sdir_deg*Math.PI/180:0,toDeg=(d+180)%360,br=toDeg*Math.PI/180,u=spd_ms*Math.sin(br),v=spd_ms*Math.cos(br),var_s=sigma_s*sigma_s,var_b=sigma_beta*sigma_beta,sinb=Math.sin(br),cosb=Math.cos(br),varU=sinb*sinb*var_s+spd_ms*spd_ms*cosb*cosb*var_b,varV=cosb*cosb*var_s+spd_ms*spd_ms*sinb*sinb*var_b;pts.push({alt:alt_m,u:u,v:v,varU:varU,varV:varV})}}),pts.sort((A,B)=>B.alt-A.alt),pts}
+function keyLL(p, prec=1e-5){
+  const lat = (p.lat||p.latitude).toFixed(5);
+  const lng = (p.lng||p.lon||p.longitude).toFixed(5);
+  return lat + "," + lng;
+}
+function percentile(arr, p){
+  if(!arr.length) return NaN;
+  const s=[...arr].sort((a,b)=>a-b);
+  const idx=Math.min(s.length-1, Math.max(0, Math.round(p*(s.length-1))));
+  return s[idx];
+}
+function robustElevHybrid(elevs){
+  if(!elevs.length) return NaN;
+  const p90=percentile(elevs,0.90), med=percentile(elevs,0.50), mx=percentile(elevs,1.00);
+  // משקל עיקרי ל-p90, תמיכה קלה ב-max כדי לא לפספס רכסים צרים
+  return 0.6*p90 + 0.3*med + 0.1*mx;
+}
+function rollingMedian(arr, win=5){
+  if(!arr.length || win<=1) return arr.slice();
+  const half=Math.floor(win/2), out=new Array(arr.length);
+  for(let i=0;i<arr.length;i++){
+    const a=Math.max(0,i-half), b=Math.min(arr.length-1,i+half);
+    const seg=arr.slice(a,b+1).sort((x,y)=>x-y);
+    out[i]=seg[Math.floor(seg.length/2)];
+  }
+  return out;
+}
+async function elevAPI_cached(points, dropLatLng, neededRadiusM){
+  // השתמש במטמון כדי להימנע משליפות כפולות
+  const uncached=[], backMap=[], result=new Array(points.length);
+  for(let i=0;i<points.length;i++){
+    const key=keyLL(points[i]);
+    if(elevPointCache.has(key)){
+      result[i]=elevPointCache.get(key);
+    }else{
+      backMap.push([i,key]);
+      uncached.push(points[i]);
+    }
+  }
+  if(uncached.length){
+    const vals = await elevAPI(uncached, dropLatLng, neededRadiusM);
+    if(!vals) return null;
+    vals.forEach((v,j)=>{
+      const [i,key]=backMap[j];
+      elevPointCache.set(key,v);
+      result[i]=v;
+    });
+  }
+  return result;
+}
+
+/* --- THIS IS THE FIXED FUNCTION --- */
+function avgWindVectorMS(altTopMSL,groundMSL,descent_ms){let pts=getRadiosondePointsMS();const relevantPts=pts.filter(p=>p.alt<=altTopMSL);if(relevantPts.length===0)return null;const top=Math.max(altTopMSL,groundMSL),bot=groundMSL;if(top<=bot)return{u:0,v:0,varU:0,varV:0,t:0};function velAt(alt){for(const p of relevantPts){if(p.alt>=alt)return p}return relevantPts[0]}const cuts=[top,...relevantPts.map(p=>p.alt).filter(a=>a>bot&&a<top),bot].sort((a,b)=>b-a);let u_acc=0,v_acc=0,varU_acc=0,varV_acc=0,total=0;for(let i=0;i<cuts.length-1;i++){const a_hi=cuts[i],a_lo=cuts[i+1],thick=a_hi-a_lo,p=velAt(a_hi),dt=thick/descent_ms;u_acc+=p.u*dt,v_acc+=p.v*dt,total+=dt,varU_acc+=dt*dt*p.varU,varV_acc+=dt*dt*p.varV}const u_mean=u_acc/total,v_mean=v_acc/total,varU_mean=varU_acc/(total*total),varV_mean=varV_acc/(total*total);return{u:u_mean,v:v_mean,varU:varU_mean,varV:varV_mean,t:total}}
+const pad2=n=>(n<10?"0":"")+n;
+function dest(lat,lon,b,dist){const R=6371e3,br=b*Math.PI/180,φ1=lat*Math.PI/180,λ1=lon*Math.PI/180,φ2=Math.asin(Math.sin(φ1)*Math.cos(dist/R)+Math.cos(φ1)*Math.sin(dist/R)*Math.cos(br)),λ2=λ1+Math.atan2(Math.sin(br)*Math.sin(dist/R)*Math.cos(φ1),Math.cos(dist/R)-Math.sin(φ1)*Math.sin(φ2));return{lat:φ2*180/Math.PI,lng:λ2*180/Math.PI,lon:λ2*180/Math.PI}}
+async function elevSRTM30(points){const payload=points.map(p=>({latitude:p.lat||p.latitude,longitude:p.lng||p.lon||p.longitude})),out=[],chunk=80;for(let i=0;i<payload.length;i+=chunk){const part=payload.slice(i,i+chunk),qs=part.map(p=>`${p.latitude},${p.longitude}`).join("|"),r=await fetch(`https://api.opentopodata.org/v1/srtm30m?locations=${encodeURIComponent(qs)}`);if(!r.ok)throw new Error("OpenTopoData "+r.statusText);const js=await r.json();if(js.status!=="OK")throw new Error(js.error||"OpenTopoData error");out.push(...js.results.map(x=>x.elevation))}return out}
+async function elevOpenElevation(points){const payload=points.map(p=>({latitude:p.lat||p.latitude,longitude:p.lng||p.lon||p.longitude})),r=await fetch("https://api.open-elevation.com/api/v1/lookup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({locations:payload})});if(!r.ok)throw new Error("Open-Elevation "+r.statusText);const js=await r.json();return js.results.map(e=>e.elevation)}
+async function elevAPI(points,dropLatLng,neededRadiusM){const choice=document.getElementById("elev-source").value;if(choice==="opentopodata")try{return await elevSRTM30(points)}catch(e){return alert("SRTM30m error: "+e.message),null}if(choice==="open-elev")try{return await elevOpenElevation(points)}catch(e){return alert("Open-Elevation error: "+e.message),null}try{return await elevSRTM30(points)}catch(e1){try{return await elevOpenElevation(points)}catch(e2){return alert("Elevation API error (both services): "+e2.message),null}}}
+function getBearingStepDeg(){let s=parseFloat(document.getElementById("bearing-step").value);return(!Number.isFinite(s)||s<=0)&&(s=2),Math.min(Math.max(s,.5),45)}
+function getProfileFracs(){let n=parseInt(document.getElementById("profile-samples").value,10);(!Number.isFinite(n)||n<1)&&(n=1),n=Math.min(Math.max(n,1),10);let startPct=parseFloat(document.getElementById("profile-start-pct").value);Number.isFinite(startPct)||(startPct=45),startPct=Math.min(Math.max(startPct,10),95);const start=startPct/100;if(1===n)return[1];const fracs=[];for(let i=0;i<n;i++){const f=start+i*(1-start)/(n-1);fracs.push(f)}return fracs[n-1]=1,fracs}
+function getMinSampleM(){let m=parseFloat(document.getElementById("min-sample-m").value);return(!Number.isFinite(m)||m<=0)&&(m=40),Math.max(m,5)}
+async function fetchForecastData(){if(!marker)return void alert("Please set a drop point on the map first.");const btn=document.getElementById("fetch-forecast");btn.disabled=!0,btn.textContent="Fetching...";const rawOutput=document.getElementById("forecast-raw-output");rawOutput.value="Fetching...";try{const lat=marker.getLatLng().lat,lon=marker.getLatLng().lng,model=document.getElementById("forecast-model").value,localTimeVal=document.getElementById("forecast-time").value;if(!localTimeVal)throw new Error("Please select a valid date and time.");const localDate=new Date(localTimeVal),utcDate=new Date(localDate.getTime()-6e4*localDate.getTimezoneOffset()),dateForApi=utcDate.toISOString().slice(0,10),pressureLevels=[975,950,925,900,850,800,700,600,500],hourlyParams=["windspeed_10m","winddirection_10m"];pressureLevels.forEach(p=>{hourlyParams.push(`windspeed_${p}hPa`,`winddirection_${p}hPa`,`geopotential_height_${p}hPa`)});const apiUrl=`https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&models=${model}&timeformat=unixtime&timezone=UTC&start_date=${dateForApi}&end_date=${dateForApi}&hourly=${hourlyParams.join(",")}`,response=await fetch(apiUrl);if(!response.ok)throw new Error(`API Error: ${response.statusText} (${response.status})`);const data=await response.json();if(!data.hourly||!data.hourly.time)throw new Error("Invalid data received from API.");const targetTimeUnix=Math.floor(localDate.getTime()/1e3);let timeIndex=-1,minDiff=1/0;if(data.hourly.time.forEach((t,i)=>{const diff=Math.abs(t-targetTimeUnix);diff<minDiff&&(minDiff=diff,timeIndex=i)}),-1===timeIndex)throw new Error("Could not find a suitable time in the forecast response.");clearRs();let rawOutputText="Alt (m) | Spd (m/s) | Dir (°)\n------------------------------\n";const isImp=imperial();let ws10m_kmh=data.hourly.windspeed_10m[timeIndex],wd10m=data.hourly.winddirection_10m[timeIndex];if(null!=ws10m_kmh&&void 0!==ws10m_kmh&&null!=wd10m&&void 0!==wd10m){const spd_ms=ws10m_kmh*KMH2MS;addRsRow((isImp?32.8084:10).toFixed(0),(isImp?spd_ms*MPS2KTS:spd_ms).toFixed(2),wd10m.toFixed(0)),rawOutputText+=`${"10".padEnd(7)} | ${spd_ms.toFixed(2).padEnd(9)} | ${wd10m.toFixed(0)}\n`}pressureLevels.forEach(p_level=>{const ws_key=`windspeed_${p_level}hPa`,wd_key=`winddirection_${p_level}hPa`,h_key=`geopotential_height_${p_level}hPa`;if(data.hourly[ws_key]&&data.hourly[wd_key]&&data.hourly[h_key]){let spd_kmh=data.hourly[ws_key][timeIndex],wd=data.hourly[wd_key][timeIndex],alt_m=data.hourly[h_key][timeIndex];if(null!=spd_kmh&&void 0!==spd_kmh&&null!=wd&&void 0!==wd&&null!=alt_m&&void 0!==alt_m){const spd_ms=spd_kmh*KMH2MS;addRsRow((isImp?alt_m*M2FT:alt_m).toFixed(0),(isImp?spd_ms*MPS2KTS:spd_ms).toFixed(2),wd.toFixed(0)),rawOutputText+=`${alt_m.toFixed(0).padEnd(7)} | ${spd_ms.toFixed(2).padEnd(9)} | ${wd.toFixed(0)}\n`}}}),rawOutput.value=rawOutputText,alert(`Forecast from ${model.toUpperCase()} for ${new Date(1e3*data.hourly.time[timeIndex]).toLocaleString()} loaded successfully.`),document.getElementById("wind-source").value="radiosonde",toggleWindSource(),marker&&calc()}catch(error){alert(`Failed to fetch forecast: ${error.message}`),rawOutput.value=`Error: ${error.message}`}finally{btn.disabled=!1,btn.textContent="Fetch & Populate Profile"}}
+async function calculateFootprintVertices(source, options = {}) {
+  let alt = parseFloat(document.getElementById("drop-alt").value),
+      err = parseFloat(document.getElementById("drop-error").value),
+      desc = parseFloat(document.getElementById("descent-speed").value);
+  if (imperial()) { alt/=M2FT; err/=M2FT; desc/=M2FT; }
+
+  const altMode = document.querySelector('input[name="alt-type"]:checked').value;
+  const uMode   = document.getElementById("uncertainty-mode").value;
+  const sigmaMode = document.getElementById("sigma-mode").value;
+  const kSigma  = parseInt(document.getElementById("sigma-level").value,10) || 0;
+
+  const drop = marker.getLatLng();
+
+  // גובה קרקע בנקודת ההטלה
+  const gArr = await elevAPI([drop], drop, 500);
+  if (!gArr) return null;
+  const ground = gArr[0];
+
+  const altAGL = (altMode === "msl") ? (alt - ground) : alt;
+  if (altAGL <= 0) { alert("Drop altitude is below ground level!"); return null; }
+
+  const glide = parseFloat(document.getElementById("glide-ratio").value);
+  const tFlat = altAGL / desc;
+  const baseR_noWind = glide * desc * tFlat + err;
+
+  // רוח ממודל/סונדה – כמו קודם
+  let vAvg = null, modelMean_ms = 0, avgWindForDisplay = { speed: 0 };
+  if (source === "model") {
+    const modelSelect = document.getElementById("wind-model-select");
+    const modelIndex  = options.forceCustom ? windModels.findIndex(m => m.name === "Custom") : modelSelect.value;
+    const model = windModels[modelIndex] || windModels[0];
+    let mean_ms, sigma_ms, gustFactor;
+    if (model.name === "Custom") {
+      const meanIn  = parseFloat(document.getElementById("custom-mean-wind").value);
+      const sigmaIn = parseFloat(document.getElementById("custom-sigma").value);
+      const gustIn  = parseFloat(document.getElementById("custom-gust-factor").value);
+      mean_ms   = Number.isFinite(meanIn)  ? (imperial()? meanIn/MPS2KTS : meanIn) : 5;
+      sigma_ms  = Number.isFinite(sigmaIn) ? (imperial()? sigmaIn/MPS2KTS: sigmaIn) : 1;
+      gustFactor= Number.isFinite(gustIn)  ? Math.max(0,gustIn) : 1.5;
+    } else {
+      mean_ms = model.mean; sigma_ms = model.sigma; gustFactor = model.gust;
+    }
+    const calcMode = document.querySelector('input[name="wind-calc"]:checked').value;
+    modelMean_ms   = mean_ms;
+    if (calcMode === "mean_1s") modelMean_ms += sigma_ms;
+    else if (calcMode === "mean_2s") modelMean_ms += 2*sigma_ms;
+    else if (calcMode === "gust")    modelMean_ms *= gustFactor;
+    avgWindForDisplay.speed = modelMean_ms;
+  } else if (source === "radiosonde") {
+    const topMSL = ground + altAGL;
+    vAvg = avgWindVectorMS(topMSL, ground, desc);
+    if (!vAvg) { alert("Please enter at least one valid radiosonde layer."); return null; }
+    const mag = Math.sqrt(vAvg.u*vAvg.u + vAvg.v*vAvg.v);
+    avgWindForDisplay.speed = mag;
+  }
+
+  const BEARING_STEP_DEG = getBearingStepDeg();
+  const PROFILE_FRACS    = getProfileFracs();
+  const MIN_SAMPLE_M     = getMinSampleM();
+
+  const bearings = [];
+  for (let a=0; a<360-1e-6; a+=BEARING_STEP_DEG) bearings.push(+a.toFixed(6));
+
+  // רקע לרדיוסונדה (ללא שינוי לוגי מהותי)
+  let bgEnabled=false, bgSpeed_ms=0, bgSig_ms=0, bgCenterTo=0, bgHalf=22, bgMode="exact";
+  if (source === "radiosonde" && vAvg) {
+    bgEnabled = document.getElementById("rs-bg-enable").checked;
+    if (bgEnabled) {
+      let sVal = parseFloat(document.getElementById("rs-bg-speed").value);
+      let sSig = parseFloat(document.getElementById("rs-bg-sigma").value);
+      if (imperial()) { sVal/=MPS2KTS; if (Number.isFinite(sSig)) sSig/=MPS2KTS; }
+      bgSpeed_ms = Number.isFinite(sVal) ? Math.max(0,sVal) : 0;
+      bgSig_ms   = Number.isFinite(sSig) ? Math.max(0,sSig) : 0;
+      bgMode     = document.querySelector('input[name="rs-bg-mode"]:checked')?.value || "exact";
+      if (bgMode === "sector") {
+        const hVal = parseFloat(document.getElementById("rs-bg-half").value);
+        bgHalf = Number.isFinite(hVal) ? Math.min(Math.max(hVal,1),180) : 22;
+      }
+      bgCenterTo = (180*Math.atan2(vAvg.u, vAvg.v)/Math.PI + 360) % 360;
+    }
+  }
+
+  const pointsForElev = [];
+  const perBearingInfo = [];
+  let neededRadius = baseR_noWind + 1500;
+
+  // דילוג אוטומטי על טווח קרוב כדי לא להינתן לפסגה צמודה
+  const skipNearM = Math.max(err*1.5, MIN_SAMPLE_M*2, 100);
+
+  for (const b of bearings) {
+    const br = b * Math.PI/180;
+    let meanAlong = 0, sigmaAlong = 0;
+
+    if (source === "model") {
+      meanAlong = modelMean_ms;
+      sigmaAlong = 0;
+    } else {
+      // רכיב הרוח בכיוון האזימוט מהרדיוסונדה
+      let meanAlong_vec = vAvg.u * Math.sin(br) + vAvg.v * Math.cos(br);
+      const varAlong_proj = Math.sin(br)**2 * vAvg.varU + Math.cos(br)**2 * vAvg.varV;
+      const sigma_proj = Math.sqrt(Math.max(0, varAlong_proj));
+      const M = Math.hypot(vAvg.u, vAvg.v);
+      const sigma_ht = (M<1e-8) ? sigma_proj
+        : Math.sqrt(Math.max(0,(vAvg.u**2*vAvg.varU + vAvg.v**2*vAvg.varV)/M**2)) * Math.abs(meanAlong_vec/M);
+      const sigma_vec = (sigmaMode === "projection") ? sigma_proj
+                        : (sigmaMode === "headtail") ? sigma_ht
+                        : Math.max(sigma_proj, sigma_ht);
+
+      if (source === "radiosonde" && bgEnabled) {
+        const tol = (bgMode === "exact") ? (BEARING_STEP_DEG/2 - 1e-9) : bgHalf;
+        angDiffDeg(b, bgCenterTo) > tol
+          ? (meanAlong = bgSpeed_ms, sigmaAlong = bgSig_ms)
+          : (meanAlong = meanAlong_vec, sigmaAlong = sigma_vec);
+      } else {
+        meanAlong = meanAlong_vec; sigmaAlong = sigma_vec;
+      }
+    }
+
+    let alongUpper, alongLower;
+    if (sigmaAlong === 0) {
+      alongUpper = alongLower = meanAlong;
+    } else {
+      if (source !== "model" && sigmaMode !== "projection" && meanAlong >= 0) {
+        alongUpper = meanAlong + kSigma*sigmaAlong;
+        alongLower = meanAlong - kSigma*sigmaAlong;
+      } else {
+        alongUpper = meanAlong - kSigma*sigmaAlong;
+        alongLower = meanAlong + kSigma*sigmaAlong;
+      }
+    }
+
+    const rEstOut = glide*desc*tFlat + alongUpper*tFlat + err;
+    neededRadius = Math.max(neededRadius, rEstOut + 500);
+
+    const idxs=[], dists=[];
+    for (const f of PROFILE_FRACS) {
+      const r = Math.max(MIN_SAMPLE_M, f*rEstOut);
+      const p = dest(drop.lat, drop.lng, b, r);
+      idxs.push(pointsForElev.length); dists.push(r);
+      pointsForElev.push(p);
+    }
+    perBearingInfo.push({ b, br, alongUpper, alongLower, idxs, dists });
+  }
+
+  // שליפת גבהים (עם מטמון/דאופליקציה)
+  const elevProfileVals = await elevAPI_cached(pointsForElev, drop, neededRadius);
+  if (!elevProfileVals) return null;
+
+  // חישוב רדיוסים עם Robust AGL
+  const rOutArr=[], rInArr=[];
+  for (const info of perBearingInfo) {
+    const { b, alongUpper, alongLower, idxs, dists } = info;
+    const elevs = idxs.map(j => elevProfileVals[j]);
+
+    // סינון טווח קרוב (skipNearM) אם אפשר
+    const farElevs = [];
+    for (let k=0;k<elevs.length;k++) if (dists[k] >= skipNearM) farElevs.push(elevs[k]);
+    const useElevs = farElevs.length ? farElevs : elevs;
+
+    // גובה אפקטיבי חסין-פיקים
+    const effElev = robustElevHybrid(useElevs);
+    const effAGL  = altAGL - (effElev - ground);
+    const t       = effAGL > 0 ? (effAGL/desc) : 0;
+
+    const rUpper = (t>0 ? (glide*desc*t + alongUpper*t) : 0) + err;
+    const rLower = (t>0 ? (glide*desc*t + alongLower*t) : 0) + err;
+    rOutArr.push(Math.max(0, rUpper));
+    rInArr .push(Math.max(0, rLower));
+  }
+
+  // Guard: אם כל הגזרה התמוטטה א-טופולוגית (קטנה מדי מול still-air)
+  const rOutMed = percentile(rOutArr, 0.50);
+  const expectedStill = baseR_noWind;
+  let rOutUse = rOutArr.slice(), rInUse = rInArr.slice();
+  if (rOutMed < 0.35 * expectedStill) {
+    console.warn("Footprint guard: suspiciously small; soft-lifting outer radii.");
+    // העלאה רכה של הרדיוס החיצוני בלי לשנות את הגיאומטריה באופן חד
+    const lift = 0.25 * (expectedStill - rOutMed);
+    rOutUse = rOutUse.map(r => r + Math.max(0, lift));
+  }
+
+  // החלקה רכה סביב 360°
+  const rOutSm = rollingMedian(rOutUse, 5);
+  const rInSm  = rollingMedian(rInUse,  5);
+
+  // יצירת ורטקסים
+  const verts_outer=[], verts_inner=[];
+  let maxR=0, minR=Infinity;
+  for (let i=0;i<perBearingInfo.length;i++) {
+    const b = perBearingInfo[i].b;
+    const rOut = rOutSm[i], rIn = rInSm[i];
+    verts_outer.push(dest(drop.lat, drop.lng, b, rOut));
+    verts_inner.push(dest(drop.lat, drop.lng, b, Math.max(0,rIn)));
+    maxR = Math.max(maxR, rOut);
+    minR = Math.min(minR, Math.max(0,rIn));
+  }
+
+  return { verts_outer, verts_inner, maxR, minR, ground, avgWindForDisplay };
+}
+async function calc(){if(!marker)return;const btn=document.getElementById("calc"),kbtn=document.getElementById("kml");btn.disabled=!0,kbtn.disabled=!0,overlay.clearLayers(),kml=null,btn.textContent="Calculating...";const src=document.getElementById("wind-source").value;if("forecast"===src)return btn.disabled=!1,btn.textContent="Calculate Landing Zone",void alert("Please fetch the forecast data first, or switch to another wind source.");const dropLL=marker.getLatLng(),uMode=document.getElementById("uncertainty-mode").value;try{if(L.circle(dropLL,{radius:parseFloat(document.getElementById("drop-error").value)/(imperial()?M2FT:1),color:"orange",fillOpacity:.5}).addTo(overlay),"combined"===src){const result_radio=await calculateFootprintVertices("radiosonde"),result_custom=await calculateFootprintVertices("model",{forceCustom:!0});if(!result_radio||!result_custom)throw new Error("Calculation failed for one of the combined sources.");document.getElementById("elev").textContent=`Drop Point Elevation: ${imperial()?(result_radio.ground*M2FT).toFixed(1)+" ft":result_radio.ground.toFixed(1)+" m"}`;const wind=result_radio.avgWindForDisplay;document.getElementById("wind-speed").value=(imperial()?wind.speed*MPS2KTS:wind.speed).toFixed(2);const combined_verts_outer=[],combined_verts_inner=[];for(let i=0;i<result_radio.verts_outer.length;i++){const p_radio_out=result_radio.verts_outer[i],p_custom_out=result_custom.verts_outer[i],dist_radio_out=map.distance(dropLL,L.latLng(p_radio_out.lat,p_radio_out.lng)),dist_custom_out=map.distance(dropLL,L.latLng(p_custom_out.lat,p_custom_out.lng));combined_verts_outer.push(dist_radio_out>dist_custom_out?p_radio_out:p_custom_out);const p_radio_in=result_radio.verts_inner[i],p_custom_in=result_custom.verts_inner[i],dist_radio_in=map.distance(dropLL,L.latLng(p_radio_in.lat,p_radio_in.lng)),dist_custom_in=map.distance(dropLL,L.latLng(p_custom_in.lat,p_custom_in.lng));combined_verts_inner.push(dist_radio_in<dist_custom_in?p_radio_in:p_custom_in)}let maxR=0,minR=1/0;combined_verts_outer.forEach(v=>maxR=Math.max(maxR,map.distance(dropLL,L.latLng(v.lat,v.lng)))),combined_verts_inner.forEach(v=>minR=Math.min(minR,map.distance(dropLL,L.latLng(v.lat,v.lng)))),L.polygon(result_radio.verts_outer.map(v=>[v.lat,v.lng]),{color:"#ff8800",fill:!1,weight:1,dashArray:"4 4",opacity:.7}).addTo(overlay),L.polygon(result_custom.verts_outer.map(v=>[v.lat,v.lng]),{color:"#007bff",fill:!1,weight:1,dashArray:"4 4",opacity:.7}).addTo(overlay),L.polygon(combined_verts_outer.map(v=>[v.lat,v.lng]),{color:"#ff00ff",fillOpacity:.25,weight:2.5}).addTo(overlay),"envelope"===uMode&&L.polygon(combined_verts_inner.map(v=>[v.lat,v.lng]),{color:"#ff00ff",fill:!1,weight:2.5,dashArray:"6 8"}).addTo(overlay),document.getElementById("range").textContent=`Max Distance (outer): ${(imperial()?maxR*M2FT:maxR).toFixed(0)} ${imperial()?"ft":"m"}`,document.getElementById("range-inner").textContent="envelope"===uMode?`Min Distance (inner): ${(imperial()?minR*M2FT:minR).toFixed(0)} ${imperial()?"ft":"m"}`:"—",kml={drop:dropLL,err:parseFloat(document.getElementById("drop-error").value)/(imperial()?M2FT:1),vertsOuter:combined_verts_outer,vertsInner:"envelope"===uMode?combined_verts_inner:null,maxR}}else{const result=await calculateFootprintVertices(src);if(!result)throw new Error(`Calculation failed for source: ${src}`);const{verts_outer,verts_inner,maxR,minR,ground,avgWindForDisplay}=result;document.getElementById("elev").textContent=`Drop Point Elevation: ${imperial()?(ground*M2FT).toFixed(1)+" ft":ground.toFixed(1)+" m"}`,document.getElementById("wind-speed").value=(imperial()?avgWindForDisplay.speed*MPS2KTS:avgWindForDisplay.speed).toFixed(2),L.polygon(verts_outer.map(v=>[v.lat,v.lng]),{color:"#ff8800",fillOpacity:.25,weight:2}).addTo(overlay),"envelope"===uMode&&L.polygon(verts_inner.map(v=>[v.lat,v.lng]),{color:"#0057ff",fill:!1,weight:2,dashArray:"6 8"}).addTo(overlay),document.getElementById("range").textContent=`Max Distance (outer): ${(imperial()?maxR*M2FT:maxR).toFixed(0)} ${imperial()?"ft":"m"}`,document.getElementById("range-inner").textContent="envelope"===uMode?`Min Distance (inner/upwind): ${(imperial()?minR*M2FT:minR).toFixed(0)} ${imperial()?"ft":"m"}`:"—",kml={drop:dropLL,err:parseFloat(document.getElementById("drop-error").value)/(imperial()?M2FT:1),vertsOuter:verts_outer,vertsInner:"envelope"===uMode?verts_inner:null,maxR}}if(kml&&kml.maxR){const finalMaxR=kml.maxR,saf=L.circle(dropLL,{radius:finalMaxR,color:"red",fillOpacity:0,dashArray:"5 10"}).addTo(overlay);finalMaxR>0&&map.fitBounds(saf.getBounds().pad(.08))}kbtn.disabled=!1}catch(error){console.error("Calculation error:",error)}finally{btn.disabled=!1,btn.textContent="Calculate Landing Zone"}}
+function exportKML(){if(!kml)return void alert("Calculate first!");const head='<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>',foot="</Document></kml>",drop=`<Placemark><name>Drop Point</name><Point><coordinates>${kml.drop.lng},${kml.drop.lat},0</coordinates></Point></Placemark>`,parts=[drop,circKML(kml.drop,kml.err,"ff07a5ff","Drop Error Zone"),vertsKML(kml.vertsOuter,"Landing Footprint (outer)","ffff8833",!0),kml.vertsInner?vertsKML(kml.vertsInner,"Landing Footprint (inner)","ff0057ff",!1):"",circKML(kml.drop,kml.maxR,"ff0000ff","Max Safety (outline)",!0)].join(""),xml=head+parts+foot,blob=new Blob([xml],{type:"application/vnd.google-earth.kml+xml"}),a=document.createElement("a");a.href=URL.createObjectURL(blob),a.download="landing_zone_envelope.kml",document.body.appendChild(a),a.click(),document.body.removeChild(a),URL.revokeObjectURL(a.href)}
+function vertsKML(verts,name,col,fill=!0){let coords=verts.map(v=>`${v.lng},${v.lat},0`).join(" ");return coords+=` ${verts[0].lng},${verts[0].lat},0`,`<Placemark><name>${name}</name><Style><LineStyle><color>${col}</color><width>2</width></LineStyle>${fill?`<PolyStyle><color>4D${col.slice(2)}</color></PolyStyle>`:""}</Style><Polygon><outerBoundaryIs><LinearRing><coordinates>${coords}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>`}
+function circKML(c,r,col,name,outline=!1){let coords="";for(let b=0;b<=360;b+=2)coords+=`${dest(c.lat,c.lng,b,r).lng},${dest(c.lat,c.lng,b,r).lat},0 `;return`<Placemark><name>${name}</name><Style><LineStyle><color>${col}</color><width>2</width></LineStyle><PolyStyle><color>${outline?"00ffffff":"4D"+col.slice(2)}</color></PolyStyle></Style><Polygon><outerBoundaryIs><LinearRing><coordinates>${coords}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>`}
+
+</script>
+<script defer="defer" src="govmap_bg_injector.js"></script></body>
+</html>
